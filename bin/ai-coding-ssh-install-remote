@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# ai-coding-ssh-install-remote — Install Claude Code on a remote server
+#
+# Handles both online and offline installation scenarios.
+# ============================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info()  { echo -e "${GREEN}[✓]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+err()   { echo -e "${RED}[✗]${NC} $*" >&2; }
+
+usage() {
+  cat <<'USAGE'
+ai-coding-ssh-install-remote — Install Claude Code CLI on a remote server
+
+Usage:
+  ai-coding-ssh-install-remote [options] [user@]host
+
+Options:
+  --offline         Pack local Claude Code and transfer via scp (for air-gapped servers)
+  -i, --identity    SSH identity file
+  -P, --ssh-port    SSH port (default: 22)
+  -h, --help        Show this help
+
+Modes:
+  Online (default):  Runs `npm install -g @anthropic-ai/claude-code` on the remote
+  Offline:           Packs a local npm tarball, scps it, and installs from file
+USAGE
+}
+
+SSH_TARGET=""
+SSH_PORT="22"
+SSH_IDENTITY=""
+OFFLINE=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --offline)        OFFLINE=true; shift ;;
+    -i|--identity)    SSH_IDENTITY="$2"; shift 2 ;;
+    -P|--ssh-port)    SSH_PORT="$2"; shift 2 ;;
+    -h|--help)        usage; exit 0 ;;
+    -*)               err "Unknown option: $1"; usage; exit 1 ;;
+    *)                SSH_TARGET="$1"; shift ;;
+  esac
+done
+
+if [ -z "$SSH_TARGET" ]; then
+  err "Missing SSH target."
+  usage
+  exit 1
+fi
+
+SSH_OPTS=()
+[ "$SSH_PORT" != "22" ] && SSH_OPTS+=(-p "$SSH_PORT")
+[ -n "$SSH_IDENTITY" ] && SSH_OPTS+=(-i "$SSH_IDENTITY")
+
+SCP_OPTS=()
+[ "$SSH_PORT" != "22" ] && SCP_OPTS+=(-P "$SSH_PORT")
+[ -n "$SSH_IDENTITY" ] && SCP_OPTS+=(-i "$SSH_IDENTITY")
+
+# --- Check remote prerequisites ---
+info "Checking remote server prerequisites..."
+REMOTE_CHECK=$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash <<'CHECK'
+  echo "node:$(command -v node 2>/dev/null || echo 'none')"
+  echo "npm:$(command -v npm 2>/dev/null || echo 'none')"
+  echo "claude:$(command -v claude 2>/dev/null || echo 'none')"
+  if command -v node &>/dev/null; then
+    echo "node_version:$(node -e 'console.log(process.versions.node)')"
+  fi
+CHECK
+)
+
+echo "$REMOTE_CHECK" | while IFS=: read -r key value; do
+  case "$key" in
+    node)    [ "$value" = "none" ] && warn "Node.js not found on remote" || info "Node.js: $value" ;;
+    npm)     [ "$value" = "none" ] && warn "npm not found on remote" || info "npm: $value" ;;
+    claude)  [ "$value" != "none" ] && info "Claude Code already installed: $value" ;;
+    node_version) info "Node.js version: $value" ;;
+  esac
+done
+
+# Check if node exists
+if echo "$REMOTE_CHECK" | grep -q "^node:none"; then
+  err "Node.js is not installed on the remote server."
+  echo ""
+  echo "Please install Node.js >= 18 first. Options:"
+  echo "  1. curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt install -y nodejs"
+  echo "  2. Download from https://nodejs.org and scp the binary"
+  echo "  3. Use nvm: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash"
+  exit 1
+fi
+
+# --- Online Install ---
+if ! $OFFLINE; then
+  info "Installing Claude Code on remote (online mode)..."
+  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash <<'INSTALL'
+    set -e
+    echo "[*] Running: npm install -g @anthropic-ai/claude-code"
+    npm install -g @anthropic-ai/claude-code 2>&1
+    echo ""
+    echo "[✓] Claude Code installed: $(claude --version 2>/dev/null || echo 'done')"
+INSTALL
+  info "Remote installation complete!"
+  exit 0
+fi
+
+# --- Offline Install ---
+info "Packing Claude Code for offline transfer..."
+
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# Pack the npm package
+cd "$TMPDIR"
+npm pack @anthropic-ai/claude-code 2>/dev/null
+TARBALL=$(ls -1 anthropic-ai-claude-code-*.tgz 2>/dev/null | head -1)
+
+if [ -z "$TARBALL" ]; then
+  err "Failed to pack @anthropic-ai/claude-code. Is it installed locally?"
+  exit 1
+fi
+
+TARBALL_SIZE=$(du -h "$TARBALL" | cut -f1)
+info "Packed: $TARBALL ($TARBALL_SIZE)"
+
+# Transfer
+info "Transferring to remote server..."
+scp "${SCP_OPTS[@]}" "$TARBALL" "${SSH_TARGET}:/tmp/${TARBALL}"
+
+# Install on remote
+info "Installing on remote (offline mode)..."
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash <<INSTALL
+  set -e
+  echo "[*] Installing from /tmp/${TARBALL}..."
+  npm install -g "/tmp/${TARBALL}" 2>&1
+  rm -f "/tmp/${TARBALL}"
+  echo ""
+  echo "[✓] Claude Code installed: \$(claude --version 2>/dev/null || echo 'done')"
+INSTALL
+
+info "Remote offline installation complete!"

@@ -1,0 +1,63 @@
+{
+  "name": "ai-coding-ssh",
+  "version": "1.1.0",
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "description": "Windows / Electron: SSH reverse tunnel to local Clash + merge ~/.claude/settings.json for Claude Code",
+  "main": ".vite/build/main.js",
+  "bin": {
+    "ai-coding-ssh-install-remote": "./bin/ai-coding-ssh-install-remote"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "test": "node -e \"console.log('no tests');\""
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "src/",
+    "index.html",
+    "forge.config.cjs",
+    "vite.*.mjs",
+    "README.md",
+    "README_EN.md",
+    "start-app.bat"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ssh",
+    "proxy",
+    "reverse-tunnel",
+    "clash",
+    "anthropic",
+    "electron"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Heliner/ai-coding-ssh"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.6.3",
+    "@electron-forge/maker-squirrel": "^7.6.3",
+    "@electron-forge/maker-zip": "^7.6.3",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-vite": "^7.6.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.1",
+    "vite": "^6.0.6"
+  }
+}
