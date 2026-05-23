@@ -41,6 +41,7 @@ export default function App() {
   const [logs, setLogs] = useState('');
   const [message, setMessage] = useState('');
   const [tunnelBusy, setTunnelBusy] = useState(false);
+  const [remotePortBusy, setRemotePortBusy] = useState(false);
   const [outboundForm, setOutboundForm] = useState(defaultOutboundForm);
 
   const refreshProxy = useCallback(async () => {
@@ -188,6 +189,59 @@ export default function App() {
       setMessage(String(e.message || e));
     } finally {
       setTunnelBusy(false);
+    }
+  };
+
+  const runtimeSecretsPayload = () => {
+    const rt = {};
+    if (runtimePassword.trim()) {
+      rt.password = runtimePassword.trim();
+    }
+    return rt;
+  };
+
+  const onCheckRemotePort = async () => {
+    setMessage('');
+    if (!selectedId || remotePortBusy || isConnected) return;
+    setRemotePortBusy(true);
+    try {
+      const st = await api.checkRemotePort({
+        serverId: selectedId,
+        runtimeSecrets: runtimeSecretsPayload(),
+      });
+      if (st.inUse) {
+        setMessage(`远端 127.0.0.1:${st.remotePort} 已被占用${st.detail ? `：${st.detail}` : ''}`);
+      } else {
+        setMessage(`远端 127.0.0.1:${st.remotePort} 空闲，可以连接`);
+      }
+    } catch (e) {
+      setMessage(String(e.message || e));
+    } finally {
+      setRemotePortBusy(false);
+    }
+  };
+
+  const onReleaseRemotePort = async () => {
+    setMessage('');
+    if (!selectedId || remotePortBusy || isConnected) return;
+    if (
+      !confirm(
+        `将 SSH 登录云主机并结束占用远端反向端口（127.0.0.1:${form.remotePort || 18080}）的残留 sshd 会话。继续？`,
+      )
+    ) {
+      return;
+    }
+    setRemotePortBusy(true);
+    try {
+      await api.releaseRemotePort({
+        serverId: selectedId,
+        runtimeSecrets: runtimeSecretsPayload(),
+      });
+      setMessage('远端端口已释放，可以重新连接');
+    } catch (e) {
+      setMessage(String(e.message || e));
+    } finally {
+      setRemotePortBusy(false);
     }
   };
 
@@ -485,6 +539,30 @@ export default function App() {
                 onClick={onDisconnect}
               >
                 {tunnelBusy && isConnected ? '断开中…' : '断开'}
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '12px 0 8px' }}>
+              断网后若重连失败、提示远端端口被占用：先点 <strong>断开</strong>（或托盘退出），再点{' '}
+              <strong>释放远端端口</strong>。连接时也会自动尝试清理残留会话。
+            </p>
+
+            <div className="row">
+              <button
+                type="button"
+                className="secondary"
+                disabled={!selectedId || remotePortBusy || isConnected || tunnelBusy}
+                onClick={onCheckRemotePort}
+              >
+                {remotePortBusy ? '检查中…' : '检查远端端口'}
+              </button>
+              <button
+                type="button"
+                className="danger"
+                disabled={!selectedId || remotePortBusy || isConnected || tunnelBusy}
+                onClick={onReleaseRemotePort}
+              >
+                {remotePortBusy ? '释放中…' : '释放远端端口'}
               </button>
             </div>
 

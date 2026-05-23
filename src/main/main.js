@@ -10,6 +10,11 @@ import * as settings from './settings-store.js';
 import * as desktopPrefs from './preferences-store.js';
 import { probeTcpConnect } from './tcp-probe.js';
 import { openReverseTunnel } from './ssh-tunnel.js';
+import { connectSshClient, endSshClient } from './ssh-connect.js';
+import {
+  probeRemoteForwardPort,
+  releaseRemoteForwardPort,
+} from './remote-port.js';
 import {
   applyClaudeCodeProxySettings,
   removeClaudeCodeProxyEnvKeys,
@@ -67,7 +72,7 @@ function attachTunnelDropHandler(serverId, entry) {
     if (entry.closing) return;
     sendTunnelLog(
       serverId,
-      'SSH 连接已断开（可能是 WiFi/网络中断）。若重连提示远端端口被占用，请先在托盘右键「退出」结束旧进程，或等待服务端释放端口。',
+      'SSH 连接已断开（可能是 WiFi/网络中断）。若重连失败，请先断开或托盘退出，再点击「释放远端端口」。',
     );
     active.delete(serverId);
     broadcastState();
@@ -238,6 +243,45 @@ async function buildAuthSecrets(rec, runtimeSecrets) {
   return { auth, keySource };
 }
 
+/**
+ * @param {object} rec
+ * @param {object} [runtimeSecrets]
+ * @param {(msg: string) => void} onLog
+ * @param {(client: import('ssh2').Client) => Promise<T>} fn
+ * @template T
+ */
+async function withSshSession(rec, runtimeSecrets, onLog, fn) {
+  const { auth } = await buildAuthSecrets(rec, runtimeSecrets || {});
+  const client = await connectSshClient({
+    host: typeof rec.host === 'string' ? rec.host.trim() : rec.host,
+    port: rec.sshPort || 22,
+    username: rec.username,
+    password: auth.password,
+    privateKey: auth.privateKey,
+    passphrase: auth.passphrase,
+    onLog,
+  });
+  try {
+    return await fn(client);
+  } finally {
+    await endSshClient(client);
+  }
+}
+
+async function precleanRemoteForwardPort(rec, runtimeSecrets, serverId) {
+  const remotePort = rec.remotePort || 18080;
+  const onLog = (msg) => sendTunnelLog(serverId, msg);
+  await withSshSession(rec, runtimeSecrets, onLog, async (client) => {
+    const status = await probeRemoteForwardPort(client, remotePort);
+    if (!status.inUse) {
+      onLog(`连接前检查：远端 127.0.0.1:${remotePort} 空闲`);
+      return;
+    }
+    onLog(`连接前检查：远端 127.0.0.1:${remotePort} 已被占用，自动清理残留会话…`);
+    await releaseRemoteForwardPort(client, remotePort, onLog);
+  });
+}
+
 app.on('second-instance', () => {
   showMainWindow();
 });
@@ -327,6 +371,14 @@ app.whenReady().then(() => {
       sendTunnelLog(serverId, '认证: 将尝试密码与 keyboard-interactive（若服务端需要）');
     }
 
+    try {
+      await precleanRemoteForwardPort(rec, runtimeSecrets, serverId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      sendTunnelLog(serverId, `连接前端口清理失败: ${msg}`);
+      throw e;
+    }
+
     const ssh = await openReverseTunnel({
       host: typeof rec.host === 'string' ? rec.host.trim() : rec.host,
       port: rec.sshPort || 22,
@@ -365,6 +417,27 @@ app.whenReady().then(() => {
   );
 
   ipcMain.handle('tunnel:logs', (_evt, serverId) => active.get(serverId)?.log.slice(-300) ?? []);
+
+  ipcMain.handle('tunnel:checkRemotePort', async (_evt, { serverId, runtimeSecrets }) => {
+    const rec = settings.listServers().find((s) => s.id === serverId);
+    if (!rec) throw new Error('找不到服务器');
+    const remotePort = rec.remotePort || 18080;
+    return withSshSession(rec, runtimeSecrets, (msg) => sendTunnelLog(serverId, msg), (client) =>
+      probeRemoteForwardPort(client, remotePort),
+    );
+  });
+
+  ipcMain.handle('tunnel:releaseRemotePort', async (_evt, { serverId, runtimeSecrets }) => {
+    if (active.has(serverId)) {
+      throw new Error('请先断开当前隧道，再释放远端端口');
+    }
+    const rec = settings.listServers().find((s) => s.id === serverId);
+    if (!rec) throw new Error('找不到服务器');
+    const remotePort = rec.remotePort || 18080;
+    return withSshSession(rec, runtimeSecrets, (msg) => sendTunnelLog(serverId, msg), (client) =>
+      releaseRemoteForwardPort(client, remotePort, (msg) => sendTunnelLog(serverId, msg)),
+    );
+  });
 
   ipcMain.handle('remote:applyClaudeSettings', async (_evt, serverId) => {
     const e = active.get(serverId);

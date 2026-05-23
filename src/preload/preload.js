@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('aiCodingSsh', {
 
   connectTunnel: (payload) => ipcRenderer.invoke('tunnel:connect', payload),
   disconnectTunnel: (serverId) => ipcRenderer.invoke('tunnel:disconnect', serverId),
+  checkRemotePort: (payload) => ipcRenderer.invoke('tunnel:checkRemotePort', payload),
+  releaseRemotePort: (payload) => ipcRenderer.invoke('tunnel:releaseRemotePort', payload),
   listTunnels: () => ipcRenderer.invoke('tunnel:list'),
   tunnelLogs: (serverId) => ipcRenderer.invoke('tunnel:logs', serverId),
 
